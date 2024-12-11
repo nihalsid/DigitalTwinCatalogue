@@ -1,0 +1,11 @@
+name: dtc_tool
+channels:
+  - defaults
+dependencies:
+  - pip=24.2
+  - python=3.12.4
+  - pip:
+      - opencv-python==4.10.0.84
+      - projectaria-tools==1.5.5
+      - trimesh==4.5.3
+      - imageio==2.36.1

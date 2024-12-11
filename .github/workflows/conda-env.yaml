@@ -1,0 +1,35 @@
+name: Conda Environment CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test conda env
+    runs-on: "ubuntu-latest"
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: dtc_tool
+          environment-file: environment.yml
+          python-version: 3.12.4
+          auto-activate-base: false
+      - run: |
+          conda info
+          conda list
+          conda activate dtc_tool
+          pip install -r requirements.txt
+          cd tool
+          python download_model_with_sequence.py --help
+          python generate_aria_mask.py --help
+          python generate_dslr_mask.py --help
+          python visualize_aria.py --help
