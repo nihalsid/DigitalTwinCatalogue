@@ -49,6 +49,8 @@ def get_model_names(sequence_output_folder):
         metadata_file = os.path.join(
             sequence_output_folder, sequence_folder, "metadata.json"
         )
+        if not os.path.exists(metadata_file):
+            continue
         with open(metadata_file) as f:
             metadata = json.load(f)
 

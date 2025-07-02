@@ -15,6 +15,7 @@
 import json
 import os
 from argparse import ArgumentParser
+from pathlib import Path
 
 import cv2
 import imageio
@@ -108,6 +109,7 @@ def save_mask(
     focal,
     output_folder,
     frame_id,
+    device_time_ns,
 ):
     T_world_device = pose_info.transform_world_device
     T_device_camera = rgb_camera_calib.get_transform_device_camera()
@@ -140,6 +142,18 @@ def save_mask(
     output_file_name = "aria_{id:0=4}.png"
     output_path = os.path.join(output_folder, output_file_name.format(id=frame_id))
     imageio.imwrite(output_path, mask_img)
+
+    output_file_name = "transform_{id:0=4}.json"
+    output_path = os.path.join(output_folder, output_file_name.format(id=frame_id))
+    Path(output_path).write_text(
+        json.dumps(
+            {
+                "T_camera_world": T_camera_world.tolist(),
+                "intrinsic": intrinsic.tolist(),
+                "device_time_ns": device_time_ns,
+            }
+        )
+    )
 
     return mask_img
 
@@ -176,6 +190,10 @@ def process_sequence(
         object_pose = json.load(f)
     T_world_object = np.array(object_pose["mesh"]["T_world_object"])
 
+    tmesh = trimesh.load(mesh_file, force="mesh", process=False)
+    tmesh.apply_transform(T_world_object)
+    trimesh.Trimesh(vertices=tmesh.vertices, faces=tmesh.faces).export(Path(combined_folder).parent / "geometry.obj")
+
     mps_data_paths_provider = MpsDataPathsProvider(mps_folder)
     mps_data_paths = mps_data_paths_provider.get_data_paths()
 
@@ -189,6 +207,7 @@ def process_sequence(
             last_rgb_camera_calib = camera_calib
 
     provider = data_provider.create_vrs_data_provider(vrs_file)
+    provider.set_color_correction(True)
     rgb_stream_label = "camera-rgb"
     rgb_stream_id = StreamId("214-1")
     deliver_option = provider.get_default_deliver_queued_options()
@@ -225,6 +244,7 @@ def process_sequence(
                 focal,
                 mask_folder,
                 frame_id,
+                device_time_ns,
             )
             save_combined_image(rgb_img, mask_img, combined_folder, frame_id)
 
@@ -237,15 +257,15 @@ def main(args):
         metadata = json.load(f)
 
     model_name = metadata["model_name"][0]
-
+    sequence_name = Path(args.sequence_folder).name
     object_pose_file = os.path.join(args.sequence_folder, "object_pose.json")
     mesh_file = os.path.join(args.model_folder, model_name, "3d-asset.glb")
     vrs_file = os.path.join(args.sequence_folder, "video.vrs")
     mps_folder = os.path.join(args.sequence_folder, "mps")
 
-    mask_folder = os.path.join(args.output_folder, "mask")
-    image_folder = os.path.join(args.output_folder, "image")
-    combined_folder = os.path.join(args.output_folder, "overlay")
+    mask_folder = os.path.join(args.output_folder, sequence_name, "mask")
+    image_folder = os.path.join(args.output_folder, sequence_name, "image")
+    combined_folder = os.path.join(args.output_folder, sequence_name, "overlay")
 
     os.makedirs(mask_folder, exist_ok=True)
     os.makedirs(image_folder, exist_ok=True)
