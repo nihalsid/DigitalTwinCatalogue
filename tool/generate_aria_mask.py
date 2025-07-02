@@ -192,7 +192,9 @@ def process_sequence(
 
     tmesh = trimesh.load(mesh_file, force="mesh", process=False)
     tmesh.apply_transform(T_world_object)
-    trimesh.Trimesh(vertices=tmesh.vertices, faces=tmesh.faces).export(Path(combined_folder).parent / "geometry.obj")
+    trimesh.Trimesh(vertices=tmesh.vertices, faces=tmesh.faces).export(
+        Path(combined_folder).parent / "geometry.obj"
+    )
 
     mps_data_paths_provider = MpsDataPathsProvider(mps_folder)
     mps_data_paths = mps_data_paths_provider.get_data_paths()
@@ -207,7 +209,7 @@ def process_sequence(
             last_rgb_camera_calib = camera_calib
 
     provider = data_provider.create_vrs_data_provider(vrs_file)
-    provider.set_color_correction(True)
+    # provider.set_color_correction(True)
     rgb_stream_label = "camera-rgb"
     rgb_stream_id = StreamId("214-1")
     deliver_option = provider.get_default_deliver_queued_options()
