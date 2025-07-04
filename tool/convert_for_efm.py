@@ -17,12 +17,12 @@ from google.genai import types
 from PIL import Image
 
 
-def jpg_encode(image, do_gray):
+def encode(image, format, do_gray):
     image = Image.fromarray(image)
     if do_gray:
         image = image.convert("L")
     buffer = io.BytesIO()
-    image.save(buffer, format="JPEG")
+    image.save(buffer, format=format)
     return buffer.getvalue()
 
 
@@ -132,6 +132,19 @@ def main():
     folder = Path(sys.argv[1])
     sequence_name = sys.argv[2]
 
+    recmode = "active" if "active" in sequence_name else "passive"
+    selection_indices = (
+        (
+            Path(folder).parent
+            / "selection"
+            / recmode
+            / (sequence_name.split("_")[0] + ".txt")
+        )
+        .read_text()
+        .splitlines()
+    )
+    selection_indices = [int(x.strip()) for x in selection_indices if x.strip() != ""]
+
     # Load the point cloud
     pointcloud_gz = (
         folder
@@ -179,7 +192,7 @@ def main():
         1 - mask_images[0][:, :, None]
     ) * np.array([30, 30, 30])
     caption = caption_using_gemini(
-        jpg_encode(image_for_caption.astype(np.uint8), do_gray=False)
+        encode(image_for_caption.astype(np.uint8), "JPEG", do_gray=False)
     )
     print(caption)
 
@@ -202,20 +215,22 @@ def main():
     inv_std = inv_std[stdevs_mask]
     dist_std = dist_std[stdevs_mask]
 
-    print("Visualizing pointcloud")
-    visualize_point_cloud(points, "pointcloud.obj")
+    # print("Visualizing pointcloud")
+    # visualize_point_cloud(points, "pointcloud.obj")
 
     print("Filtering point cloud by mask")
     # project the points to the image
 
     filter_mask = np.ones(len(points), dtype=bool)
     image_data = []
+    mask_data = []
 
     for i in range(len(color_images)):
-        color_images[i, :, :, :] = mask_images[i][:, :, None] * color_images[i][
-            :, :, :
-        ] + (1 - mask_images[i][:, :, None]) * np.array([30, 30, 30])
-        image_data.append(jpg_encode(color_images[i], do_gray=True))
+        # color_images[i, :, :, :] = mask_images[i][:, :, None] * color_images[i][
+        #     :, :, :
+        # ] + (1 - mask_images[i][:, :, None]) * np.array([30, 30, 30])
+        image_data.append(encode(color_images[i], "JPEG", do_gray=True))
+        mask_data.append(encode(mask_images[i], "PNG", do_gray=True))
 
         point_image = project_point_to_image(
             points, camera_intrinsics[i], np.linalg.inv(camera_extrinsics[i]), 800, 800
@@ -235,7 +250,7 @@ def main():
         )
 
         color_images[i, :, :, 0] = point_mask
-        Image.fromarray(color_images[i]).save(f"dump/image_{i}.png")
+        # Image.fromarray(color_images[i]).save(f"dump/image_{i}.png")
 
     points = points[filter_mask]
     inv_std = inv_std[filter_mask]
@@ -250,6 +265,14 @@ def main():
 
     half_bounds = (np.max(points, axis=0) - np.min(points, axis=0)) / 2
 
+    image_data = [image_data[i] for i in selection_indices]
+    camera_extrinsics = [camera_extrinsics[i] for i in selection_indices]
+    camera_extrinsics = np.stack(camera_extrinsics)
+    camera_intrinsics = [camera_intrinsics[i] for i in selection_indices]
+    camera_intrinsics = np.stack(camera_intrinsics)
+    object_point_projections = [object_point_projections[i] for i in selection_indices]
+    mask_data = [mask_data[i] for i in selection_indices]
+
     pkl_data = {
         "points_model": torch.from_numpy(points),
         "caption": caption,
@@ -263,6 +286,7 @@ def main():
         "Ts_camera_model": torch.from_numpy(camera_extrinsics),
         "camera_params": torch.from_numpy(camera_intrinsics),
         "object_point_projections": object_point_projections,
+        "m2f_masks": mask_data,
         "is_dtc": True,
     }
 
@@ -270,12 +294,15 @@ def main():
         if isinstance(pkl_data[key], torch.Tensor):
             print(f"{key}: {pkl_data[key].shape}")
 
-    print("Visualizing filtered pointcloud")
-    visualize_point_cloud(points, "filtered_pointcloud.obj")
+    # print("Visualizing filtered pointcloud")
+    # visualize_point_cloud(points, "filtered_pointcloud.obj")
 
     # save pkl file
 
-    with open(f"{sequence_name}.pkl", "wb") as f:
+    output_dir = f"dtc_{recmode}"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    with open(f"{output_dir}/{sequence_name}.pkl", "wb") as f:
         pickle.dump(pkl_data, f)
 
 
