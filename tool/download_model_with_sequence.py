@@ -25,7 +25,7 @@ def download_sequences(sequence_cdn_file, sequence_output_folder, sequence_names
         + sequence_output_folder
     )
 
-    if len(sequence_names) > 0:
+    if sequence_names is not None and len(sequence_names) > 0:
         sequence_download_cmd += " -l " + " ".join(sequence_names)
 
     os.system(sequence_download_cmd)
