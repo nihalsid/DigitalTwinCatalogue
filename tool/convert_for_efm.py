@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pysdf
 import torch
 import trimesh
 from google import genai
@@ -93,52 +94,59 @@ def get_prompt():
 
 
 def caption_using_gemini(image_bytes):
-    model = "gemini-2.0-flash"
-    client = genai.Client(
-        api_key=os.environ.get("VLLM_API_TOKEN"),
-    )
-    contents = [
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_bytes(
-                    mime_type="image/jpeg",
-                    data=image_bytes,
-                ),
-                types.Part.from_text(text=get_prompt()),
-            ],
-        ),
-    ]
-    generate_content_config = types.GenerateContentConfig(
-        temperature=1,
-        top_p=0.95,
-        top_k=40,
-        max_output_tokens=8192,
-        response_mime_type="text/plain",
-    )
-    generated_content = []
-    for chunk in client.models.generate_content_stream(
-        model=model,
-        # pyre-fixme[6]: For 2nd argument expected `Union[List[Union[List[Union[I...
-        contents=contents,
-        config=generate_content_config,
-    ):
-        generated_content.append(chunk.text)
-    caption = "".join(generated_content)
+    try:
+        model = "gemini-2.0-flash"
+        client = genai.Client(
+            api_key=os.environ.get("VLLM_API_TOKEN"),
+        )
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_bytes(
+                        mime_type="image/jpeg",
+                        data=image_bytes,
+                    ),
+                    types.Part.from_text(text=get_prompt()),
+                ],
+            ),
+        ]
+        generate_content_config = types.GenerateContentConfig(
+            temperature=1,
+            top_p=0.95,
+            top_k=40,
+            max_output_tokens=8192,
+            response_mime_type="text/plain",
+        )
+        generated_content = []
+        for chunk in client.models.generate_content_stream(
+            model=model,
+            # pyre-fixme[6]: For 2nd argument expected `Union[List[Union[List[Union[I...
+            contents=contents,
+            config=generate_content_config,
+        ):
+            generated_content.append(chunk.text)
+        caption = "".join(generated_content)
+    except Exception as e:
+        print(e)
+        caption = "an object"
     return caption
 
 
 def main():
     folder = Path(sys.argv[1])
     sequence_name = sys.argv[2]
-
     recmode = "active" if "active" in sequence_name else "passive"
+    output_dir = f"dtc_{recmode}"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
     selection_indices = (
         (
             Path(folder).parent
             / "selection"
             / recmode
-            / (sequence_name.split("_")[0] + ".txt")
+            / ("_".join(sequence_name.split("_")[:-1]) + ".txt")
         )
         .read_text()
         .splitlines()
@@ -219,38 +227,16 @@ def main():
     # visualize_point_cloud(points, "pointcloud.obj")
 
     print("Filtering point cloud by mask")
-    # project the points to the image
-
-    filter_mask = np.ones(len(points), dtype=bool)
     image_data = []
     mask_data = []
 
     for i in range(len(color_images)):
-        # color_images[i, :, :, :] = mask_images[i][:, :, None] * color_images[i][
-        #     :, :, :
-        # ] + (1 - mask_images[i][:, :, None]) * np.array([30, 30, 30])
         image_data.append(encode(color_images[i], "JPEG", do_gray=True))
         mask_data.append(encode(mask_images[i], "PNG", do_gray=True))
 
-        point_image = project_point_to_image(
-            points, camera_intrinsics[i], np.linalg.inv(camera_extrinsics[i]), 800, 800
-        )
-        point_mask = plot_dots(point_image[:, :2], 800, 800)
-
-        # check the value of the mask at point image rounded to the nearest integer
-        mask_i = mask_images[i]
-        point_image_valid_z_mask = point_image[:, 2] > 0
-        x = np.clip(point_image[:, 0], 0, mask_i.shape[1] - 1).astype(int)
-        y = np.clip(point_image[:, 1], 0, mask_i.shape[0] - 1).astype(int)
-        point_image_valid_uv_mask = mask_i[y, x]
-
-        filter_mask = np.logical_and(
-            filter_mask,
-            np.logical_and(point_image_valid_z_mask, point_image_valid_uv_mask),
-        )
-
-        color_images[i, :, :, 0] = point_mask
-        # Image.fromarray(color_images[i]).save(f"dump/image_{i}.png")
+    f = pysdf.SDF(mesh.vertices, mesh.faces)
+    distance_from_mesh = np.abs(f(points))
+    filter_mask = distance_from_mesh <= 0.005
 
     points = points[filter_mask]
     inv_std = inv_std[filter_mask]
@@ -294,14 +280,11 @@ def main():
         if isinstance(pkl_data[key], torch.Tensor):
             print(f"{key}: {pkl_data[key].shape}")
 
-    # print("Visualizing filtered pointcloud")
-    # visualize_point_cloud(points, "filtered_pointcloud.obj")
+    print("Visualizing filtered pointcloud")
+    visualize_point_cloud(points, "filtered_pointcloud.obj")
 
     # save pkl file
 
-    output_dir = f"dtc_{recmode}"
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
     with open(f"{output_dir}/{sequence_name}.pkl", "wb") as f:
         pickle.dump(pkl_data, f)
 
