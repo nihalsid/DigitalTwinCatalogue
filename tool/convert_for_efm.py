@@ -4,6 +4,7 @@ import json
 
 import os
 import pickle
+import random
 import sys
 from io import StringIO
 from pathlib import Path
@@ -41,7 +42,7 @@ def visualize_point_cloud(points, vis_path, colors=None) -> None:
         )
 
 
-def project_point_to_image(points_world, camera_intrinsics, cam2world, W, H):
+def project_point_to_image(points_world, camera_intrinsics, cam2world):
     K = camera_intrinsics[:3, :3]
     world2cam = np.linalg.inv(cam2world)
     points_camera = (world2cam[:3, :3] @ points_world.T).T + world2cam[:3, 3]
@@ -138,6 +139,9 @@ def main():
     sequence_name = sys.argv[2]
     recmode = "active" if "active" in sequence_name else "passive"
     output_dir = f"dtc_{recmode}"
+    use_om_bounding_boxes = True
+    do_index_selection = False  # do random selection later
+
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -196,9 +200,10 @@ def main():
                 np.array(Image.open(image_folder / file.name).convert("RGB"))
             )
 
-    image_for_caption = mask_images[0][:, :, None] * color_images[0][:, :, :] + (
-        1 - mask_images[0][:, :, None]
-    ) * np.array([30, 30, 30])
+    idx_for_caption = len(mask_images) // 2
+    image_for_caption = mask_images[idx_for_caption][:, :, None] * color_images[
+        idx_for_caption
+    ][:, :, :] + (1 - mask_images[idx_for_caption][:, :, None]) * np.array([30, 30, 30])
     caption = caption_using_gemini(
         encode(image_for_caption.astype(np.uint8), "JPEG", do_gray=False)
     )
@@ -234,30 +239,52 @@ def main():
         image_data.append(encode(color_images[i], "JPEG", do_gray=True))
         mask_data.append(encode(mask_images[i], "PNG", do_gray=True))
 
-    f = pysdf.SDF(mesh.vertices, mesh.faces)
-    distance_from_mesh = np.abs(f(points))
-    filter_mask = distance_from_mesh <= 0.005
+    if use_om_bounding_boxes:
+        points = np.array(
+            json.loads((folder / "om" / (sequence_name + ".json")).read_text())[
+                "points"
+            ]
+        )
+        inv_std = np.ones_like(points)[:, :1]
+        dist_std = np.ones_like(points)[:, :1]
+    else:
+        f = pysdf.SDF(mesh.vertices, mesh.faces)
+        distance_from_mesh = np.abs(f(points))
+        filter_mask = distance_from_mesh <= 0.005
 
-    points = points[filter_mask]
-    inv_std = inv_std[filter_mask]
-    dist_std = dist_std[filter_mask]
+        points = points[filter_mask]
+        inv_std = inv_std[filter_mask]
+        dist_std = dist_std[filter_mask]
 
     object_point_projections = []
     for i in range(len(color_images)):
         point_image = project_point_to_image(
-            points, camera_intrinsics[i], np.linalg.inv(camera_extrinsics[i]), 800, 800
+            points, camera_intrinsics[i], np.linalg.inv(camera_extrinsics[i])
         )
         object_point_projections.append(torch.from_numpy(point_image[:, :2]).float())
 
     half_bounds = (np.max(points, axis=0) - np.min(points, axis=0)) / 2
 
-    image_data = [image_data[i] for i in selection_indices]
-    camera_extrinsics = [camera_extrinsics[i] for i in selection_indices]
-    camera_extrinsics = np.stack(camera_extrinsics)
-    camera_intrinsics = [camera_intrinsics[i] for i in selection_indices]
-    camera_intrinsics = np.stack(camera_intrinsics)
-    object_point_projections = [object_point_projections[i] for i in selection_indices]
-    mask_data = [mask_data[i] for i in selection_indices]
+    if do_index_selection:
+        selection_indices_fixed = []
+
+        for i in selection_indices:
+            if i < len(image_data):
+                selection_indices_fixed.append(i)
+            else:
+                selection_indices_fixed.append(random.choice(range(len(image_data))))
+
+        selection_indices = selection_indices_fixed
+
+        image_data = [image_data[i] for i in selection_indices]
+        camera_extrinsics = [camera_extrinsics[i] for i in selection_indices]
+        camera_extrinsics = np.stack(camera_extrinsics)
+        camera_intrinsics = [camera_intrinsics[i] for i in selection_indices]
+        camera_intrinsics = np.stack(camera_intrinsics)
+        object_point_projections = [
+            object_point_projections[i] for i in selection_indices
+        ]
+        mask_data = [mask_data[i] for i in selection_indices]
 
     pkl_data = {
         "points_model": torch.from_numpy(points),
@@ -281,7 +308,7 @@ def main():
             print(f"{key}: {pkl_data[key].shape}")
 
     print("Visualizing filtered pointcloud")
-    visualize_point_cloud(points, "filtered_pointcloud.obj")
+    # visualize_point_cloud(points, "filtered_pointcloud.obj")
 
     # save pkl file
 
